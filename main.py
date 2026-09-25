@@ -1,6 +1,9 @@
 import hashlib
+import hmac
 import json
 import logging
+import os
+import secrets
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,11 +21,22 @@ logger = logging.getLogger("portal-notas")
 # ── Setup ─────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Portal de Notas")
 
+# Origens permitidas: em produção o frontend é servido pelo próprio FastAPI
+# (mesma origem, CORS não se aplica). Em dev, o Vite roda em :5173.
+# Para liberar outras origens, defina ALLOWED_ORIGINS="https://a.com,https://b.com".
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 DB_PATH = Path("data/grades.db")
@@ -35,7 +49,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Erro não tratado em {request.url}: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Erro interno: {type(exc).__name__}: {exc}"},
+        content={"detail": "Erro interno do servidor. Tente novamente mais tarde."},
     )
 
 
@@ -67,8 +81,39 @@ def init_db():
 init_db()
 
 
-def sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+PBKDF2_ITERATIONS = 200_000
+
+
+def hash_password(password: str) -> str:
+    """PBKDF2-HMAC-SHA256 com salt aleatório. Formato: pbkdf2$iter$salt$hash"""
+    salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), PBKDF2_ITERATIONS
+    ).hex()
+    return f"pbkdf2${PBKDF2_ITERATIONS}${salt}${h}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Verifica senha. Aceita o formato legado (SHA-256 puro) para migração."""
+    if stored.startswith("pbkdf2$"):
+        try:
+            _, iter_s, salt, expected = stored.split("$", 3)
+            h = hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"), bytes.fromhex(salt), int(iter_s)
+            ).hex()
+            return hmac.compare_digest(h, expected)
+        except (ValueError, TypeError):
+            return False
+    # Legado: SHA-256 sem salt (versão inicial do portal)
+    legacy = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy, stored)
+
+
+def issue_token() -> str:
+    """Gera token de sessão aleatório e o persiste (login anterior é revogado)."""
+    token = secrets.token_urlsafe(32)
+    set_config("admin_token", token)
+    return token
 
 
 def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -106,8 +151,8 @@ def verify_admin(authorization: Optional[str] = Header(None)) -> bool:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Não autorizado — faça login novamente")
     token = authorization.split(" ", 1)[1]
-    stored = get_config("password_hash")
-    if not stored or token != stored:
+    stored = get_config("admin_token")
+    if not stored or not hmac.compare_digest(token, stored):
         raise HTTPException(status_code=401, detail="Token inválido — faça login novamente")
     return True
 
@@ -154,9 +199,8 @@ def setup(req: SetupRequest):
         raise HTTPException(400, "Senha já configurada")
     if len(req.password) < 6:
         raise HTTPException(400, "Senha deve ter ao menos 6 caracteres")
-    h = sha256(req.password)
-    set_config("password_hash", h)
-    return {"ok": True, "token": h}
+    set_config("password_hash", hash_password(req.password))
+    return {"ok": True, "token": issue_token()}
 
 
 @app.post("/api/login")
@@ -164,10 +208,13 @@ def login(req: LoginRequest):
     stored = get_config("password_hash")
     if not stored:
         raise HTTPException(400, "Nenhuma senha configurada")
-    h = sha256(req.password)
-    if h != stored:
+    if not verify_password(req.password, stored):
         raise HTTPException(401, "Senha incorreta")
-    return {"ok": True, "token": h}
+    # Migração transparente: hash legado (SHA-256) → PBKDF2 com salt
+    if not stored.startswith("pbkdf2$"):
+        set_config("password_hash", hash_password(req.password))
+        logger.info("Hash de senha migrado para PBKDF2")
+    return {"ok": True, "token": issue_token()}
 
 
 @app.post("/api/grades", dependencies=[Depends(verify_admin)])
@@ -194,7 +241,7 @@ def upload_grades(req: GradesUpload):
     except Exception as e:
         conn.rollback()
         logger.error(f"Erro ao salvar grades: {e}", exc_info=True)
-        raise HTTPException(500, f"Erro ao salvar no banco: {e}")
+        raise HTTPException(500, "Erro ao salvar as notas. Verifique o arquivo e tente novamente.")
     finally:
         conn.close()
 
