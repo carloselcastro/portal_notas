@@ -1,17 +1,16 @@
 import { useState, useEffect } from "react";
-import Papa from "papaparse";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const API = import.meta.env.VITE_API_URL || "";
 
+// ─── Marca Ibmec ─────────────────────────────────────────────────────────────
+const IBMEC_BLUE = "#002555";
+const IBMEC_BLUE_LIGHT = "#1e4d8c";
+const IBMEC_YELLOW = "#F5AC00";
+
 async function api(path, opts = {}) {
-  const token = localStorage.getItem("admin_token");
   const res = await fetch(`${API}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers || {}),
-    },
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
     ...opts,
   });
   if (!res.ok) {
@@ -22,14 +21,6 @@ async function api(path, opts = {}) {
 }
 
 // ─── Utils ───────────────────────────────────────────────────────────────────
-function normalize(str) {
-  return (str || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
 function gradeStyle(val) {
   const n = parseFloat(String(val).replace(",", "."));
   if (isNaN(n) || val === "" || val === null || val === undefined) return null;
@@ -111,7 +102,7 @@ function Inp({ label, ...props }) {
           background: "#fff",
           ...(props.style || {}),
         }}
-        onFocus={(e) => (e.target.style.borderColor = "#002855")}
+        onFocus={(e) => (e.target.style.borderColor = IBMEC_BLUE)}
         onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
       />
     </div>
@@ -120,9 +111,8 @@ function Inp({ label, ...props }) {
 
 function Btn({ children, variant = "primary", loading, ...props }) {
   const styles = {
-    primary: { background: "#002855", color: "#fff" },
+    primary: { background: IBMEC_BLUE, color: "#fff" },
     secondary: { background: "#f1f5f9", color: "#475569" },
-    danger: { background: "#fef2f2", color: "#dc2626", border: "1.5px solid #fecaca" },
   };
   return (
     <button
@@ -205,7 +195,7 @@ function PageBG({ children }) {
     <div
       style={{
         minHeight: "100vh",
-        background: "linear-gradient(135deg, #0f172a 0%, #002855 60%, #1e3a5f 100%)",
+        background: `linear-gradient(135deg, #0f172a 0%, ${IBMEC_BLUE} 60%, #1e3a5f 100%)`,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -218,148 +208,99 @@ function PageBG({ children }) {
   );
 }
 
+function DisciplinaView({ disc }) {
+  const gradeEntries = (disc.columns || []).map((c) => [c, disc.grades[c]]);
+  const filled = gradeEntries.filter(
+    ([, v]) => v !== "" && v !== null && v !== undefined && String(v).trim() !== ""
+  ).length;
+
+  return (
+    <div>
+      {/* Progress */}
+      <div style={{ marginBottom: 20 }}>
+        <div
+          style={{
+            display: "flex", justifyContent: "space-between",
+            fontSize: 12, color: "#94a3b8", marginBottom: 6,
+          }}
+        >
+          <span>Notas lançadas</span>
+          <span>{filled} / {gradeEntries.length}</span>
+        </div>
+        <div style={{ background: "#f1f5f9", borderRadius: 99, height: 6, overflow: "hidden" }}>
+          <div
+            style={{
+              width: `${gradeEntries.length ? (filled / gradeEntries.length) * 100 : 0}%`,
+              height: "100%",
+              background: `linear-gradient(90deg, ${IBMEC_BLUE}, ${IBMEC_YELLOW})`,
+              borderRadius: 99,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Grades grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${Math.min(gradeEntries.length, 4)}, 1fr)`,
+          gap: 10,
+          marginBottom: 20,
+        }}
+      >
+        {gradeEntries.map(([label, value]) => (
+          <GradeCard key={label} label={label} value={value} />
+        ))}
+      </div>
+
+      {/* Legend */}
+      <div
+        style={{
+          display: "flex", gap: 16, fontSize: 11, color: "#94a3b8",
+          paddingTop: 14, borderTop: "1px solid #f1f5f9",
+        }}
+      >
+        {[
+          { color: "#16a34a", label: "≥ 7,0" },
+          { color: "#d97706", label: "≥ 5,0" },
+          { color: "#dc2626", label: "< 5,0" },
+          { color: "#cbd5e1", label: "Pendente" },
+        ].map(({ color, label }) => (
+          <span key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span
+              style={{
+                width: 8, height: 8, borderRadius: "50%",
+                background: color, display: "inline-block",
+              }}
+            />
+            {label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState("home");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [isFirstSetup, setIsFirstSetup] = useState(false);
-  const [studentCount, setStudentCount] = useState(0);
-  const [gradeColumns, setGradeColumns] = useState([]);
-  const [turma, setTurma] = useState("");
+  const [statusInfo, setStatusInfo] = useState(null);
 
   // forms
-  const [adminPwd, setAdminPwd] = useState("");
-  const [newPwd, setNewPwd] = useState("");
-  const [confirmPwd, setConfirmPwd] = useState("");
   const [matriculaInput, setMatriculaInput] = useState("");
   const [nomeInput, setNomeInput] = useState("");
-  const [csvText, setCsvText] = useState("");
-  const [delimiter, setDelimiter] = useState("auto");
-  const [turmaInput, setTurmaInput] = useState("");
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [studentData, setStudentData] = useState(null);
-  const [preview, setPreview] = useState(null);
+  const [activeDisc, setActiveDisc] = useState(0);
 
   useEffect(() => {
     api("/api/status")
-      .then((s) => {
-        setIsFirstSetup(!s.setup_done);
-        setStudentCount(s.student_count);
-        setGradeColumns(s.columns || []);
-        setTurma(s.turma || "");
-      })
-      .catch(() => setIsFirstSetup(true))
+      .then((s) => setStatusInfo(s))
+      .catch(() => setStatusInfo({ ok: false, error: "Não foi possível conectar ao servidor." }))
       .finally(() => setLoading(false));
   }, []);
-
-  // ── Admin ──────────────────────────────────────────────────────────────────
-  async function handleAdminSetup() {
-    if (!newPwd || newPwd.length < 6) return setError("Senha deve ter ao menos 6 caracteres");
-    if (newPwd !== confirmPwd) return setError("Senhas não coincidem");
-    setBusy(true);
-    try {
-      const { token } = await api("/api/setup", {
-        method: "POST",
-        body: JSON.stringify({ password: newPwd }),
-      });
-      localStorage.setItem("admin_token", token);
-      setIsFirstSetup(false);
-      setError("");
-      setScreen("admin-panel");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleAdminLogin() {
-    setBusy(true);
-    try {
-      const { token } = await api("/api/login", {
-        method: "POST",
-        body: JSON.stringify({ password: adminPwd }),
-      });
-      localStorage.setItem("admin_token", token);
-      setAdminPwd("");
-      setError("");
-      // Refresh counts
-      const s = await api("/api/status");
-      setStudentCount(s.student_count);
-      setGradeColumns(s.columns || []);
-      setTurma(s.turma || "");
-      setTurmaInput(s.turma || "");
-      setScreen("admin-panel");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function handleParseCSV() {
-    if (!csvText.trim()) return setError("Cole o conteúdo da planilha acima");
-    const opts = { header: true, skipEmptyLines: true };
-    if (delimiter !== "auto") opts.delimiter = delimiter;
-    const result = Papa.parse(csvText.trim(), opts);
-    if (!result.data.length) return setError("Não consegui ler os dados. Tente outro separador.");
-    setPreview(result);
-    setError("");
-    setSuccess("");
-  }
-
-  async function handleSaveGrades() {
-    if (!preview) return;
-    const headers = preview.meta.fields;
-    const matriculaCol = headers.find((h) => /matr[íi]cula|^ra$|registro/i.test(h.trim()));
-    const nomeCol = headers.find((h) => /^nome|^aluno/i.test(h.trim()));
-    if (!matriculaCol)
-      return setError(`Coluna de matrícula não encontrada. Colunas: ${headers.join(", ")}`);
-
-    const gradesCols = headers.filter((h) => h !== matriculaCol && h !== nomeCol);
-    const rows = preview.data.map((row) => ({
-      matricula: String(row[matriculaCol] ?? "").trim(),
-      nome: nomeCol ? String(row[nomeCol] ?? "").trim() : "",
-      ...Object.fromEntries(gradesCols.map((c) => [c, String(row[c] ?? "").trim()])),
-    }));
-
-    setBusy(true);
-    try {
-      const { count } = await api("/api/grades", {
-        method: "POST",
-        body: JSON.stringify({ data: rows, columns: gradesCols, turma: turmaInput || turma }),
-      });
-      setStudentCount(count);
-      setGradeColumns(gradesCols);
-      setTurma(turmaInput || turma);
-      setPreview(null);
-      setCsvText("");
-      setSuccess(`✅ ${count} alunos salvos! Colunas: ${gradesCols.join(", ")}`);
-      setError("");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleClearData() {
-    if (!window.confirm("Apagar TODOS os dados? Não pode ser desfeito.")) return;
-    setBusy(true);
-    try {
-      await api("/api/grades", { method: "DELETE" });
-      setStudentCount(0);
-      setGradeColumns([]);
-      setTurma("");
-      setSuccess("Dados apagados.");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   // ── Student ────────────────────────────────────────────────────────────────
   async function handleStudentLogin() {
@@ -373,6 +314,7 @@ export default function App() {
         body: JSON.stringify({ matricula: matriculaInput.trim(), nome: nomeInput.trim() }),
       });
       setStudentData(data);
+      setActiveDisc(0);
       setScreen("student-view");
     } catch (e) {
       setError(e.message);
@@ -389,317 +331,48 @@ export default function App() {
       </PageBG>
     );
 
+  const disciplinas = statusInfo?.disciplinas || [];
+
   // HOME
   if (screen === "home")
     return (
       <PageBG>
         <Card>
           <div style={{ textAlign: "center", marginBottom: 28 }}>
-            <div
-              style={{
-                width: 64,
-                height: 64,
-                background: "linear-gradient(135deg,#002855,#1e4d8c)",
-                borderRadius: 18,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 30,
-                margin: "0 auto 16px",
-                boxShadow: "0 8px 24px rgba(0,40,85,0.25)",
-              }}
-            >
-              📋
-            </div>
+            <img
+              src="/ibmec.png"
+              alt="Ibmec"
+              style={{ width: 170, display: "block", margin: "0 auto 20px" }}
+            />
             <h1 style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", margin: 0 }}>
               Portal de Notas
             </h1>
-            {turma && (
-              <p style={{ fontSize: 13, color: "#64748b", margin: "4px 0 0", fontWeight: 500 }}>
-                {turma}
-              </p>
-            )}
+            <div
+              style={{
+                width: 44,
+                height: 4,
+                borderRadius: 99,
+                background: IBMEC_YELLOW,
+                margin: "10px auto 12px",
+              }}
+            />
             <p style={{ fontSize: 13, color: "#94a3b8", margin: "4px 0 0" }}>
               Consulta individual e sigilosa
             </p>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <Btn onClick={() => { setScreen("student-login"); setError(""); }}>
-              🎓 Consultar minhas notas
-            </Btn>
-            <Btn
-              variant="secondary"
-              onClick={() => { setScreen(isFirstSetup ? "admin-setup" : "admin-login"); setError(""); }}
-              style={{ fontSize: 13 }}
-            >
-              ⚙️ Área do professor
-            </Btn>
-          </div>
+          {statusInfo && !statusInfo.ok && (
+            <div style={{ marginBottom: 14 }}>
+              <Alert type="error">{statusInfo.error}</Alert>
+            </div>
+          )}
+          <Btn onClick={() => { setScreen("student-login"); setError(""); }}>
+            🎓 Consultar minhas notas
+          </Btn>
           <p style={{ fontSize: 11, color: "#cbd5e1", textAlign: "center", marginTop: 20, marginBottom: 0 }}>
             🔒 Dados protegidos conforme a LGPD
           </p>
         </Card>
       </PageBG>
-    );
-
-  // ADMIN SETUP
-  if (screen === "admin-setup")
-    return (
-      <PageBG>
-        <Card>
-          <BackBtn onClick={() => setScreen("home")} />
-          <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", margin: "0 0 4px" }}>
-            Configuração inicial
-          </h2>
-          <p style={{ fontSize: 13, color: "#64748b", margin: "0 0 24px" }}>
-            Crie uma senha para a área do professor
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Inp label="Nova senha" type="password" value={newPwd}
-              onChange={(e) => setNewPwd(e.target.value)} placeholder="Mínimo 6 caracteres" />
-            <Inp label="Confirmar senha" type="password" value={confirmPwd}
-              onChange={(e) => setConfirmPwd(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAdminSetup()}
-              placeholder="Repita a senha" />
-            {error && <Alert type="error">{error}</Alert>}
-            <Btn onClick={handleAdminSetup} loading={busy}>
-              Criar senha e continuar →
-            </Btn>
-          </div>
-        </Card>
-      </PageBG>
-    );
-
-  // ADMIN LOGIN
-  if (screen === "admin-login")
-    return (
-      <PageBG>
-        <Card>
-          <BackBtn onClick={() => setScreen("home")} />
-          <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", margin: "0 0 4px" }}>
-            Área do Professor
-          </h2>
-          <p style={{ fontSize: 13, color: "#64748b", margin: "0 0 24px" }}>
-            Digite sua senha para continuar
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Inp type="password" value={adminPwd}
-              onChange={(e) => setAdminPwd(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAdminLogin()}
-              placeholder="Senha do professor" />
-            {error && <Alert type="error">{error}</Alert>}
-            <Btn onClick={handleAdminLogin} loading={busy}>Entrar →</Btn>
-          </div>
-        </Card>
-      </PageBG>
-    );
-
-  // ADMIN PANEL
-  if (screen === "admin-panel")
-    return (
-      <div
-        style={{
-          minHeight: "100vh",
-          background: "#f8fafc",
-          fontFamily: "'Segoe UI', system-ui, sans-serif",
-          padding: "24px 16px",
-        }}
-      >
-        <div style={{ maxWidth: 640, margin: "0 auto" }}>
-          {/* Header */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              marginBottom: 24,
-            }}
-          >
-            <div>
-              <h2 style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", margin: 0 }}>
-                Painel do Professor
-              </h2>
-              <p style={{ fontSize: 13, color: "#64748b", margin: "2px 0 0" }}>
-                Gerencie as notas dos alunos
-              </p>
-            </div>
-            <button
-              onClick={() => setScreen("home")}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: 13, fontWeight: 600 }}
-            >
-              Sair
-            </button>
-          </div>
-
-          {/* Stats */}
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 16,
-              border: "1.5px solid #e2e8f0",
-              padding: "18px 20px",
-              marginBottom: 16,
-              display: "flex",
-              alignItems: "center",
-              gap: 16,
-            }}
-          >
-            <div
-              style={{
-                width: 48, height: 48, background: "#f0f4ff",
-                borderRadius: 14, display: "flex", alignItems: "center",
-                justifyContent: "center", fontSize: 22,
-              }}
-            >
-              👥
-            </div>
-            <div>
-              <div style={{ fontSize: 28, fontWeight: 800, color: "#002855", lineHeight: 1 }}>
-                {studentCount}
-              </div>
-              <div style={{ fontSize: 13, color: "#64748b" }}>alunos cadastrados</div>
-            </div>
-            {gradeColumns.length > 0 && (
-              <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>
-                  Colunas
-                </div>
-                <div style={{ fontSize: 12, color: "#475569" }}>{gradeColumns.join(" · ")}</div>
-              </div>
-            )}
-          </div>
-
-          {success && <div style={{ marginBottom: 16 }}><Alert type="success">{success}</Alert></div>}
-
-          {/* CSV upload */}
-          <div
-            style={{
-              background: "#fff", borderRadius: 16,
-              border: "1.5px solid #e2e8f0", padding: 20, marginBottom: 16,
-            }}
-          >
-            <h3 style={{ fontSize: 15, fontWeight: 700, color: "#0f172a", margin: "0 0 6px" }}>
-              📤 Carregar planilha (CSV)
-            </h3>
-            <p style={{ fontSize: 13, color: "#64748b", margin: "0 0 14px", lineHeight: 1.6 }}>
-              No Excel: <strong>Arquivo → Salvar Como → CSV UTF-8</strong>.<br />
-              A coluna de matrícula deve se chamar{" "}
-              <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4 }}>Matrícula</code> ou{" "}
-              <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4 }}>RA</code>,
-              e a de nome <code style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: 4 }}>Nome</code>.
-            </p>
-
-            <div style={{ display: "flex", gap: 12, marginBottom: 10, alignItems: "center" }}>
-              <label style={{ fontSize: 13, color: "#475569", fontWeight: 600 }}>Separador:</label>
-              <select
-                value={delimiter}
-                onChange={(e) => setDelimiter(e.target.value)}
-                style={{ fontSize: 13, border: "1.5px solid #e2e8f0", borderRadius: 8, padding: "4px 8px" }}
-              >
-                <option value="auto">Auto-detectar</option>
-                <option value=";">Ponto e vírgula ( ; )</option>
-                <option value=",">Vírgula ( , )</option>
-                <option value="	">Tab</option>
-              </select>
-            </div>
-
-            <div style={{ marginBottom: 10 }}>
-              <Inp
-                label="Nome da turma / disciplina (opcional)"
-                value={turmaInput}
-                onChange={(e) => setTurmaInput(e.target.value)}
-                placeholder="Ex: Cálculo I — 2025.1"
-              />
-            </div>
-
-            <textarea
-              value={csvText}
-              onChange={(e) => { setCsvText(e.target.value); setPreview(null); setSuccess(""); }}
-              style={{
-                width: "100%", border: "1.5px solid #e2e8f0", borderRadius: 10,
-                padding: "10px 12px", fontSize: 12, fontFamily: "monospace",
-                height: 110, resize: "vertical", boxSizing: "border-box", marginBottom: 10,
-              }}
-              placeholder={"Nome;Matrícula;AC1;AC2;AC3;AC4;AP1;AP2;AS\nJoão Silva;20231001;8.5;7.0;;\n..."}
-            />
-
-            {error && <div style={{ marginBottom: 10 }}><Alert type="error">{error}</Alert></div>}
-
-            <div style={{ display: "flex", gap: 10 }}>
-              <Btn variant="secondary" onClick={handleParseCSV} style={{ fontSize: 13 }}>
-                🔍 Verificar dados
-              </Btn>
-              {preview && (
-                <Btn onClick={handleSaveGrades} loading={busy} style={{ fontSize: 13 }}>
-                  ✅ Salvar {preview.data.length} alunos
-                </Btn>
-              )}
-            </div>
-          </div>
-
-          {/* Preview */}
-          {preview && (
-            <div
-              style={{
-                background: "#fff", borderRadius: 16,
-                border: "1.5px solid #e2e8f0", padding: 20, marginBottom: 16,
-              }}
-            >
-              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", margin: "0 0 12px" }}>
-                Prévia — {preview.data.length} alunos
-              </h3>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ fontSize: 12, width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      {preview.meta.fields.map((f) => (
-                        <th
-                          key={f}
-                          style={{
-                            textAlign: "left", padding: "6px 10px", color: "#64748b",
-                            fontWeight: 700, borderBottom: "1.5px solid #f1f5f9",
-                            whiteSpace: "nowrap", textTransform: "uppercase", fontSize: 11,
-                          }}
-                        >
-                          {f}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.data.slice(0, 6).map((row, i) => (
-                      <tr key={i} style={{ borderBottom: "1px solid #f8fafc" }}>
-                        {preview.meta.fields.map((f) => (
-                          <td key={f} style={{ padding: "6px 10px", color: "#334155", whiteSpace: "nowrap" }}>
-                            {row[f] || <span style={{ color: "#cbd5e1" }}>—</span>}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {preview.data.length > 6 && (
-                  <p style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", marginTop: 8 }}>
-                    … e mais {preview.data.length - 6} alunos
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Danger zone */}
-          {studentCount > 0 && (
-            <div style={{ border: "1.5px solid #fecaca", borderRadius: 16, padding: "16px 20px" }}>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: "#dc2626", margin: "0 0 10px" }}>
-                ⚠️ Zona de perigo
-              </h3>
-              <Btn variant="danger" onClick={handleClearData} loading={busy} style={{ fontSize: 13 }}>
-                🗑️ Apagar todos os dados de notas
-              </Btn>
-            </div>
-          )}
-        </div>
-      </div>
     );
 
   // STUDENT LOGIN
@@ -709,13 +382,14 @@ export default function App() {
         <Card>
           <BackBtn onClick={() => { setScreen("home"); setError(""); }} />
           <div style={{ textAlign: "center", marginBottom: 24 }}>
-            <div style={{ fontSize: 36, marginBottom: 8 }}>🎓</div>
+            <img
+              src="/ibmec.png"
+              alt="Ibmec"
+              style={{ width: 110, display: "block", margin: "0 auto 14px" }}
+            />
             <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", margin: 0 }}>
               Consultar minhas notas
             </h2>
-            {turma && (
-              <p style={{ fontSize: 13, color: "#64748b", margin: "4px 0 0" }}>{turma}</p>
-            )}
             <p style={{ fontSize: 13, color: "#94a3b8", margin: "6px 0 0" }}>
               Informe sua matrícula e primeiro nome
             </p>
@@ -753,11 +427,8 @@ export default function App() {
 
   // STUDENT VIEW
   if (screen === "student-view" && studentData) {
-    const { nome, matricula, grades, columns: cols, turma: t } = studentData;
-    const gradeEntries = (cols || []).map((c) => [c, grades[c]]);
-    const filled = gradeEntries.filter(
-      ([, v]) => v !== "" && v !== null && v !== undefined && String(v).trim() !== ""
-    ).length;
+    const { nome, matricula, disciplinas: discs } = studentData;
+    const disc = discs[Math.min(activeDisc, discs.length - 1)];
 
     return (
       <PageBG>
@@ -765,15 +436,16 @@ export default function App() {
           <div
             style={{
               display: "flex", justifyContent: "space-between",
-              alignItems: "flex-start", marginBottom: 24,
+              alignItems: "flex-start", marginBottom: 20,
             }}
           >
             <div>
               <h2 style={{ fontSize: 18, fontWeight: 800, color: "#0f172a", margin: 0 }}>
                 {nome || "Aluno"}
               </h2>
-              {t && <p style={{ fontSize: 12, color: "#64748b", margin: "2px 0", fontWeight: 500 }}>{t}</p>}
-              <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>Matrícula: {matricula}</p>
+              <p style={{ fontSize: 12, color: "#94a3b8", margin: "2px 0 0" }}>
+                Matrícula: {matricula}
+              </p>
             </div>
             <button
               onClick={() => {
@@ -791,67 +463,62 @@ export default function App() {
             </button>
           </div>
 
-          {/* Progress */}
-          <div style={{ marginBottom: 20 }}>
-            <div
-              style={{
-                display: "flex", justifyContent: "space-between",
-                fontSize: 12, color: "#94a3b8", marginBottom: 6,
-              }}
-            >
-              <span>Notas lançadas</span>
-              <span>{filled} / {gradeEntries.length}</span>
+          {/* Seletor de disciplinas (só aparece se houver mais de uma) */}
+          {discs.length > 1 && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              {discs.map((d, i) => {
+                const active = i === activeDisc;
+                return (
+                  <button
+                    key={d.id}
+                    onClick={() => setActiveDisc(i)}
+                    style={{
+                      flex: 1,
+                      padding: "10px 8px",
+                      borderRadius: 12,
+                      border: `1.5px solid ${active ? IBMEC_YELLOW : "#e2e8f0"}`,
+                      background: active ? IBMEC_BLUE : "#f8fafc",
+                      color: active ? "#fff" : "#475569",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {d.codigo || d.nome}
+                    {d.turma && (
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: 10,
+                          fontWeight: 500,
+                          opacity: 0.75,
+                          marginTop: 2,
+                        }}
+                      >
+                        {d.turma}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
-            <div style={{ background: "#f1f5f9", borderRadius: 99, height: 6, overflow: "hidden" }}>
-              <div
-                style={{
-                  width: `${gradeEntries.length ? (filled / gradeEntries.length) * 100 : 0}%`,
-                  height: "100%",
-                  background: "linear-gradient(90deg, #002855, #1e4d8c)",
-                  borderRadius: 99,
-                }}
-              />
+          )}
+
+          {/* Cabeçalho da disciplina ativa */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: IBMEC_BLUE }}>
+              {disc.codigo && `${disc.codigo} · `}
+              {disc.nome}
+              {disc.turma && (
+                <span style={{ fontSize: 12, color: "#64748b", fontWeight: 500 }}>
+                  {" "}— {disc.turma}
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Grades grid */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: `repeat(${Math.min(gradeEntries.length, 4)}, 1fr)`,
-              gap: 10,
-              marginBottom: 20,
-            }}
-          >
-            {gradeEntries.map(([label, value]) => (
-              <GradeCard key={label} label={label} value={value} />
-            ))}
-          </div>
-
-          {/* Legend */}
-          <div
-            style={{
-              display: "flex", gap: 16, fontSize: 11, color: "#94a3b8",
-              paddingTop: 14, borderTop: "1px solid #f1f5f9",
-            }}
-          >
-            {[
-              { color: "#16a34a", label: "≥ 7,0" },
-              { color: "#d97706", label: "≥ 5,0" },
-              { color: "#dc2626", label: "< 5,0" },
-              { color: "#cbd5e1", label: "Pendente" },
-            ].map(({ color, label }) => (
-              <span key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <span
-                  style={{
-                    width: 8, height: 8, borderRadius: "50%",
-                    background: color, display: "inline-block",
-                  }}
-                />
-                {label}
-              </span>
-            ))}
-          </div>
+          <DisciplinaView disc={disc} />
         </Card>
       </PageBG>
     );

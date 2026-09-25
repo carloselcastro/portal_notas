@@ -4,7 +4,12 @@ __pycache__/
 
 # Dados dos alunos (LGPD) — nunca versionar
 data/
+notas/
 *.db
+*.xlsx
+
+# Logo original em alta resolução (a versão web fica em frontend/public/)
+/ibmec.png
 
 # Node
 node_modules/
